@@ -21,12 +21,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# OS / IDE
+# OS / IDE & Embedded
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
 *.swp
+.pio/
 
 # ML Models & Datasets (if desired to keep repos lightweight)
 *.keras

@@ -228,3 +228,127 @@ This system supports **dual-sync cloud logging** to **MathWorks ThingSpeak IoT C
    THINGSPEAK_CHANNEL_ID=YOUR_CHANNEL_ID
    ```
 5. Restart your backend (`python3 app.py`). The backend will automatically sync new telemetry packets to ThingSpeak every 15 seconds (respecting ThingSpeak's rate limit), and the React Settings page will display live cloud sync statistics with a direct link to your cloud graphs!
+
+---
+
+## 11. Blynk™ IoT Cloud 2.0 Integration
+
+The system includes native, real-time integration with **Blynk™ IoT Cloud 2.0**, enabling remote monitoring from anywhere in the world through the **Blynk Mobile App (iOS & Android)** and the **Blynk Web Console**.
+
+```mermaid
+flowchart TD
+    subgraph ESP32 ["ESP32 DevKit Edge Hardware"]
+        DHT[DHT11 Temperature & Humidity]
+        MQ[MQ135 Air Quality]
+        REL[2-Channel Relays: Fan & Humidifier]
+        OLED[SSD1306 Local Display]
+        DHT --> ESP_CORE[ESP32 Closed-Loop Controller]
+        MQ --> ESP_CORE
+        ESP_CORE --> REL
+        ESP_CORE --> OLED
+    end
+
+    subgraph BlynkCloud ["Blynk™ IoT Cloud 2.0"]
+        V0["V0: Temperature (°C)"]
+        V1["V1: Humidity (%)"]
+        V2["V2: Air Quality (GOOD/POOR)"]
+        V3["V3: Fan Actuator Switch"]
+        V4["V4: Humidifier Actuator Switch"]
+        V5["V5: Auto/Manual Mode Toggle"]
+        V6["V6: MQ135 Analog ADC"]
+    end
+
+    subgraph Clients ["User Interfaces"]
+        APP["Blynk Mobile App (iOS / Android)"]
+        WEB["Blynk Web Dashboard Console"]
+        REACT["React + Vite Local Dashboard (:5173)"]
+        FLASK["Flask REST Backend (:5001)"]
+    end
+
+    ESP_CORE -- "Wi-Fi Virtual Pin Sync" --> BlynkCloud
+    ESP_CORE -- "HTTP JSON POST" --> FLASK
+    FLASK -- "REST API Backup Sync" --> BlynkCloud
+    FLASK --> REACT
+    BlynkCloud <--> APP
+    BlynkCloud <--> WEB
+```
+
+### Virtual Pin Datastream Mapping:
+| Virtual Pin | Datastream Name | Data Type | Range / Values | Widget Recommended |
+|---|---|---|---|---|
+| **V0** | Temperature | Double | 0.0 – 60.0 °C | Radial Gauge / Value Display |
+| **V1** | Humidity | Double | 0.0 – 100.0 % | Radial Gauge / Value Display |
+| **V2** | Air Quality | String | `GOOD`, `POOR` | Value Display / Label |
+| **V3** | Exhaust Fan Relay | Integer | `0` = OFF, `1` = ON | Switch / Button Widget |
+| **V4** | Humidifier Relay | Integer | `0` = OFF, `1` = ON | Switch / Button Widget |
+| **V5** | Mode Selection | Integer | `0` = AUTO, `1` = MANUAL | Switch Widget (Override Toggle) |
+| **V6** | MQ135 Raw ADC | Integer | 0 – 4095 | Line Chart / SuperChart |
+
+---
+
+### Step-by-Step Setup Instructions:
+
+#### 1. Create a Blynk Cloud Account
+1. Visit [blynk.cloud](https://blynk.cloud) and sign up for a free account.
+2. Install the **Blynk IoT** app on your phone from the Apple App Store or Google Play Store.
+
+#### 2. Create a Device Template
+1. In the Blynk Web Console, navigate to **Templates** -> **+ New Template**.
+2. Set:
+   - **Name**: `Mushroom Monitor`
+   - **Hardware**: `ESP32`
+   - **Connection Type**: `WiFi`
+3. Click **Done**.
+
+#### 3. Configure the Datastreams
+Under your template, go to the **Datastreams** tab and add the following:
+- **V0**: New Datastream -> Virtual Pin -> Pin `V0` -> Data Type `Double`, Min `0`, Max `60`, Units `°C`.
+- **V1**: New Datastream -> Virtual Pin -> Pin `V1` -> Data Type `Double`, Min `0`, Max `100`, Units `%`.
+- **V2**: New Datastream -> Virtual Pin -> Pin `V2` -> Data Type `String`.
+- **V3**: New Datastream -> Virtual Pin -> Pin `V3` -> Data Type `Integer`, Min `0`, Max `1`.
+- **V4**: New Datastream -> Virtual Pin -> Pin `V4` -> Data Type `Integer`, Min `0`, Max `1`.
+- **V5**: New Datastream -> Virtual Pin -> Pin `V5` -> Data Type `Integer`, Min `0`, Max `1` (Default: `0`).
+- **V6**: New Datastream -> Virtual Pin -> Pin `V6` -> Data Type `Integer`, Min `0`, Max `4095`.
+
+#### 4. Design the Web and Mobile Dashboards
+- **Web Dashboard**: Drag and drop 2 **Gauges** (V0 for Temp, V1 for Hum), a **Value Display** (V2 for Air), 3 **Switches** (V3 for Fan, V4 for Humidifier, V5 for Manual Mode), and a **Chart** (V0 & V1).
+- **Mobile App**: Open the Blynk IoT app on your phone, open the template, and place Gauges for V0/V1, Switches for V3/V4/V5, and a SuperChart.
+
+#### 5. Obtain Your Device Auth Token
+1. Go to **Search** (Magnifying Glass) -> **+ New Device** -> **From Template** -> Select `Mushroom Monitor`.
+2. Blynk will generate your configuration lines:
+   ```cpp
+   #define BLYNK_TEMPLATE_ID "TMPLxxxxxx"
+   #define BLYNK_TEMPLATE_NAME "Mushroom Monitor"
+   #define BLYNK_AUTH_TOKEN "YourDeviceAuthToken"
+   ```
+
+#### 6. Configure the Project
+1. **ESP32 Firmware** (`esp32/mushroom_monitor.ino` or `esp32/src/main.cpp`):
+   Paste your `BLYNK_TEMPLATE_ID`, `BLYNK_TEMPLATE_NAME`, and `BLYNK_AUTH_TOKEN` at the top of the file:
+   ```cpp
+   #define BLYNK_TEMPLATE_ID   "TMPLxxxxxx"
+   #define BLYNK_TEMPLATE_NAME "Mushroom Monitor"
+   #define BLYNK_AUTH_TOKEN    "YourDeviceAuthToken"
+   ```
+2. **Backend Environment** (`mushroom-backend/.env`):
+   ```env
+   BLYNK_ENABLED=true
+   BLYNK_AUTH_TOKEN=YourDeviceAuthToken
+   BLYNK_TEMPLATE_ID=TMPLxxxxxx
+   ```
+
+#### 7. Flash & Run
+- **Arduino IDE**: Install the **Blynk** library by *Volodymyr Shymanskyy* via `Tools -> Manage Libraries...`, select board `ESP32 Dev Module`, and click **Upload**.
+- **PlatformIO**: Run `pio run -t upload` (the `blynkkk/Blynk` library dependency is already pre-configured in `platformio.ini`).
+
+---
+
+### Dual Mode: Autonomous vs Manual Remote Override
+- **Autonomous Mode (Default, V5 = 0)**:
+  The ESP32 runs its closed-loop biological cultivation algorithms locally:
+  - If Air Quality is `POOR` (MQ135 ADC > 1500), the exhaust fan turns **ON**.
+  - If Humidity drops below `75.0%`, the ultrasonic humidifier turns **ON**.
+  - Real-time status is streamed live to your smartphone and local OLED.
+- **Manual Remote Override Mode (V5 = 1)**:
+  Toggling V5 to `1` in the Blynk Mobile App hands direct actuator control to the grower. You can manually tap the Fan switch (`V3`) or Humidifier switch (`V4`) from anywhere in the world to override the chamber actuators.
