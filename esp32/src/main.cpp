@@ -3,30 +3,32 @@
   Final-Year B.E. Electronics and Communication Engineering Project:
   "IoT and AI Based Smart Mushroom Cultivation System for Contamination Detection and Yield Prediction"
   
-  Module 1: ESP32 IoT Hardware Telemetry & Automated Actuator Controller with Blynk IoT Cloud
+  Module 1: ESP32 IoT Hardware Telemetry & Automated Actuator Controller
+  Includes: DHT11, MQ135, 2-Channel Relay, SSD1306 I2C OLED Display & Blynk IoT Cloud
   ==============================================================================
 
-  Hardware Setup:
+  Hardware Pin Mapping:
   - Microcontroller : ESP32 DevKit V1
-  - DHT11 Sensor    : Data Pin -> GPIO 5
-  - MQ135 Sensor    : Analog Output (AO) -> GPIO 34 (ADC1_CH6)
+  - DHT11 Sensor    : Data Pin  -> GPIO 5
+  - MQ135 Sensor    : Analog AO -> GPIO 34 (ADC1_CH6)
   - 2-Channel Relay :
       - Relay 1 (Fan)        -> GPIO 26
       - Relay 2 (Humidifier) -> GPIO 27
-  - (Optional) I2C OLED (SSD1306 128x64) :
-      - SDA -> GPIO 21
-      - SCL -> GPIO 22
+  - SSD1306 I2C OLED (128x64):
+      - SDA / SCA -> GPIO 21
+      - SCL       -> GPIO 22
+      - VCC       -> 3.3V
+      - GND       -> GND
 
-  Cloud & Telemetry Architecture:
-  1. Blynk IoT Cloud 2.0 (Mobile App & Web Dashboard via Blynk Virtual Pins V0-V6)
-  2. Flask REST Backend API (Local Edge Server via Wi-Fi JSON POST)
-  3. SSD1306 OLED Local Display
+  Cloud & Edge Telemetry:
+  1. Blynk IoT Cloud 2.0 (Virtual Pins V0 - V6)
+  2. Flask REST Backend API (Local Edge Server JSON POST)
+  3. SSD1306 OLED Real-Time Display with Environmental Threshold Conditions
   ==============================================================================
 */
 
 // ==============================================================================
-// 1. BLYNK IOT 2.0 CLOUD CONFIGURATION
-// (Note: In Blynk 2.0, BLYNK_TEMPLATE_ID and BLYNK_TEMPLATE_NAME must be at the very top)
+// 1. BLYNK IOT 2.0 CLOUD CONFIGURATION (Must be at the very top of file)
 // ==============================================================================
 #define BLYNK_TEMPLATE_ID   "TMPLxxxxxx"            // Replace with your Template ID from blynk.cloud
 #define BLYNK_TEMPLATE_NAME "Mushroom Monitor"     // Replace with your Template Name
@@ -47,23 +49,28 @@
   #include <BlynkSimpleEsp32.h>
 #endif
 
-// Set to 1 if you have an I2C SSD1306 OLED connected (SDA=21, SCL=22)
-// Set to 0 if you are not using an OLED screen (compiles with zero display dependencies)
+// ==============================================================================
+// 2. OLED DISPLAY CONFIGURATION & I2C PIN DEFINITIONS
+// ==============================================================================
 #define ENABLE_OLED 1
+
+// Explicit I2C OLED Pin Definitions (SDA / SCA and SCL)
+#define OLED_SDA        21   // I2C Serial Data Pin (SDA / SCA) -> GPIO 21
+#define OLED_SCL        22   // I2C Serial Clock Pin (SCL)     -> GPIO 22
+#define OLED_RESET      -1   // Reset pin (-1 if sharing Arduino reset pin)
+#define OLED_I2C_ADDR   0x3C // Standard 0.96" SSD1306 I2C Address (0x3C)
+#define SCREEN_WIDTH    128  // OLED display width in pixels
+#define SCREEN_HEIGHT   64   // OLED display height in pixels
 
 #if ENABLE_OLED
   #include <Adafruit_GFX.h>
   #include <Adafruit_SSD1306.h>
-  #define SCREEN_WIDTH 128
-  #define SCREEN_HEIGHT 64
-  #define OLED_RESET -1
-  #define OLED_I2C_ADDR 0x3C
   Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
   bool oledAvailable = false;
 #endif
 
 // ==============================================================================
-// 2. WI-FI & BACKEND NETWORK CONFIGURATION
+// 3. WI-FI & FLASK BACKEND CONFIGURATION
 // ==============================================================================
 const char* WIFI_SSID     = "Galaxy A16 5G B9D4";
 const char* WIFI_PASSWORD = "luna1234";
@@ -75,7 +82,7 @@ const char* BACKEND_URL   = "http://10.86.232.25:5001/api/sensor-data";
 const unsigned long TELEMETRY_INTERVAL_MS = 3000;
 
 // ==============================================================================
-// 3. PIN DEFINITIONS & THRESHOLDS
+// 4. SENSOR & RELAY PIN DEFINITIONS & CONTROL THRESHOLDS
 // ==============================================================================
 #define DHTPIN 5
 #define DHTTYPE DHT11
@@ -88,17 +95,17 @@ const unsigned long TELEMETRY_INTERVAL_MS = 3000;
 const float HUMIDITY_MIN_THRESHOLD      = 75.0; // Humidifier ON if humidity < 75%
 const int   MQ135_POOR_ANALOG_THRESHOLD = 1500; // POOR air if analog ADC > 1500
 
-// Relay trigger logic (Most Arduino 5V relay modules are Active LOW: LOW=ON, HIGH=OFF)
+// Relay trigger logic (Standard 5V relay modules are Active LOW: LOW=ON, HIGH=OFF)
 #define RELAY_ON  LOW
 #define RELAY_OFF HIGH
 
 // ==============================================================================
-// 4. GLOBAL STATE & FORWARD DECLARATIONS
+// 5. GLOBAL STATE VARIABLES & FORWARD DECLARATIONS
 // ==============================================================================
 DHT dht(DHTPIN, DHTTYPE);
 unsigned long lastTelemetryTime = 0;
 
-// Actuator and Control Mode states
+// Actuator & Remote Control states
 bool manualOverride = false;          // 0 = Autonomous Mode, 1 = Manual Mode from Blynk App
 bool fanManualState = false;          // Remote Fan state from Blynk App V3
 bool humidifierManualState = false;   // Remote Humidifier state from Blynk App V4
@@ -106,11 +113,11 @@ bool fanActive = false;               // Current Fan hardware status
 bool humidifierActive = false;        // Current Humidifier hardware status
 
 void connectWiFi();
-void updateOLED(float temp, float hum, const String& airQuality, int rawAir, bool fanState, bool humState, bool manualMode);
+void updateOLED(float temp, float hum, const String& airQuality, bool fanState, bool humState, int rawAir, bool manualMode);
 bool sendTelemetry(float temp, float hum, const String& airQuality, int rawAir, bool fanState, bool humState, bool manualMode);
 
 // ==============================================================================
-// 5. BLYNK VIRTUAL PIN HANDLERS (Remote App Control)
+// 6. BLYNK VIRTUAL PIN HANDLERS (Remote App Control)
 // ==============================================================================
 #if ENABLE_BLYNK
 // V5: Mode Selection (0 = Auto Mode, 1 = Manual Mode)
@@ -155,7 +162,7 @@ BLYNK_CONNECTED() {
 #endif
 
 // ==============================================================================
-// 6. HELPER FUNCTIONS
+// 7. HELPER FUNCTIONS: WI-FI & OLED DISPLAY
 // ==============================================================================
 
 void connectWiFi() {
@@ -187,7 +194,7 @@ void connectWiFi() {
       if (!Blynk.connected()) {
         Serial.println("[Blynk] Configuring and connecting to Blynk.Cloud...");
         Blynk.config(BLYNK_AUTH_TOKEN);
-        Blynk.connect(3000); // 3 second connection attempt
+        Blynk.connect(3000); // 3 second non-blocking connection attempt
         if (Blynk.connected()) {
           Serial.println("[Blynk] Connected to Blynk IoT Cloud!");
         } else {
@@ -203,29 +210,63 @@ void connectWiFi() {
   }
 }
 
-void updateOLED(float temp, float hum, const String& airQuality, int rawAir, bool fanState, bool humState, bool manualMode) {
+/*
+  ==============================================================================
+  OLED Screen Update: Displays Live Environmental Telemetry & Actuator Conditions
+  ==============================================================================
+  Conditions displayed:
+  - Header: MUSHROOM IOT MONITOR (or [MANUAL] if remote override active)
+  - Temperature (°C)
+  - Humidity (%): Flags "[LOW]" if below 75% threshold
+  - Air Quality: "GOOD" or "POOR" based on MQ135 threshold (1500)
+  - Actuator States: Fan ON/OFF, Humidifier ON/OFF
+  - Network & Cloud Status: WiFi and Blynk indicators
+  ==============================================================================
+*/
+void updateOLED(float temp, float hum, const String& airQuality, bool fanState, bool humState, int rawAir, bool manualMode) {
 #if ENABLE_OLED
   if (!oledAvailable) return;
 
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
+
+  // 1. Header with Mode Condition
   display.setCursor(0, 0);
-  display.printf("MUSHROOM IOT [%s]\n", manualMode ? "MAN" : "AUTO");
+  if (manualMode) {
+    display.println("MUSHROOM IOT [MANUAL]");
+  } else {
+    display.println("MUSHROOM IOT MONITOR ");
+  }
   display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
 
+  // 2. Temperature Condition Row
   display.setCursor(0, 14);
   display.printf("Temp: %.1f C\n", temp);
-  display.printf("Hum : %.1f %%\n", hum);
+
+  // 3. Humidity Condition Row (Flag condition if < 75%)
+  display.setCursor(0, 24);
+  if (hum < HUMIDITY_MIN_THRESHOLD) {
+    display.printf("Hum : %.1f %% [LOW]\n", hum);
+  } else {
+    display.printf("Hum : %.1f %% [OK]\n", hum);
+  }
+
+  // 4. Air Quality Condition Row (Flag condition if POOR)
+  display.setCursor(0, 34);
   display.printf("Air : %s (%d)\n", airQuality.c_str(), rawAir);
+
+  // 5. Actuator States Row (Conditions: Fan & Humidifier Relay triggers)
+  display.setCursor(0, 44);
   display.printf("Fan : %s | Hum: %s\n", fanState ? "ON" : "OFF", humState ? "ON" : "OFF");
 
+  // 6. Network & Cloud Status Footer
   display.setCursor(0, 54);
 #if ENABLE_BLYNK
   if (Blynk.connected()) {
     display.print("WiFi: OK | Blynk: OK");
   } else if (WiFi.status() == WL_CONNECTED) {
-    display.print("WiFi: OK | Blynk: Off");
+    display.print("WiFi: OK -> :5001");
   } else {
     display.print("WiFi: Disconnected");
   }
@@ -283,7 +324,7 @@ bool sendTelemetry(float temp, float hum, const String& airQuality, int rawAir, 
 }
 
 // ==============================================================================
-// 7. SETUP & MAIN LOOP
+// 8. SETUP INITIALIZATION
 // ==============================================================================
 
 void setup() {
@@ -292,7 +333,7 @@ void setup() {
 
   Serial.println("\n==================================================");
   Serial.println("Smart Mushroom Cultivation Telemetry & Actuator Hub");
-  Serial.println("With Blynk IoT Cloud & Local Edge Integration");
+  Serial.println("With OLED Display, Blynk IoT Cloud & Local Backend");
   Serial.println("==================================================");
 
   // Initialize Relays (Ensure default state is OFF)
@@ -310,29 +351,38 @@ void setup() {
   Serial.println("[Sensors] DHT11 initialized on GPIO 5");
 
 #if ENABLE_OLED
-  // Initialize OLED (I2C: SDA=GPIO 21, SCL=GPIO 22)
-  Wire.begin(21, 22);
+  // Initialize I2C communication on explicitly defined SDA (21) & SCL (22) pins
+  Wire.begin(OLED_SDA, OLED_SCL);
+  Serial.printf("[Display] I2C Wire started on SDA=%d, SCL=%d\n", OLED_SDA, OLED_SCL);
+
   if (display.begin(SSD1306_SWITCHCAPVCC, OLED_I2C_ADDR)) {
     oledAvailable = true;
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(10, 18);
-    display.println("Mushroom Monitor");
+
+    display.setCursor(10, 15);
+    display.println("MUSHROOM MONITOR");
+    display.drawLine(0, 26, 128, 26, SSD1306_WHITE);
     display.setCursor(10, 32);
     display.println("Blynk IoT Cloud");
     display.setCursor(10, 46);
     display.println("Initializing...");
     display.display();
-    Serial.println("[Display] SSD1306 OLED initialized at 0x3C");
+
+    Serial.printf("[Display] SSD1306 OLED initialized at address 0x%02X\n", OLED_I2C_ADDR);
   } else {
-    Serial.println("[Display] OLED not detected (Optional). Continuing...");
+    Serial.println("[Display] OLED not detected at 0x3C (Optional). Continuing...");
   }
 #endif
 
   // Initial Wi-Fi & Blynk connection
   connectWiFi();
 }
+
+// ==============================================================================
+// 9. MAIN CONTROL LOOP
+// ==============================================================================
 
 void loop() {
   // Ensure Wi-Fi stays connected
@@ -358,7 +408,7 @@ void loop() {
 
   unsigned long currentMillis = millis();
 
-  // Run telemetry, closed-loop control, and cloud sync every 3 seconds
+  // Run telemetry, closed-loop actuator control, and cloud sync every 3 seconds
   if (currentMillis - lastTelemetryTime >= TELEMETRY_INTERVAL_MS) {
     lastTelemetryTime = currentMillis;
 
@@ -376,16 +426,15 @@ void loop() {
     int rawAir = analogRead(MQ135_PIN);
     String airQuality = (rawAir > MQ135_POOR_ANALOG_THRESHOLD) ? "POOR" : "GOOD";
 
-    // 4. Actuator Control Logic (Auto Mode vs Manual Override Mode)
+    // 4. Closed-Loop Actuator Control Logic (Auto Mode vs Manual Mode)
     if (manualOverride) {
-      // In manual mode, states are commanded directly from Blynk App (V3 and V4)
+      // Manual Mode: Actuators are commanded directly via Blynk Mobile App (V3 and V4)
       fanActive = fanManualState;
       humidifierActive = humidifierManualState;
       digitalWrite(RELAY_FAN, fanActive ? RELAY_ON : RELAY_OFF);
       digitalWrite(RELAY_HUMIDIFIER, humidifierActive ? RELAY_ON : RELAY_OFF);
     } else {
-      // Autonomous Closed-Loop Actuator Control Logic
-      // Condition A: If air quality is POOR -> Turn Fan ON
+      // Autonomous Mode Condition A: If air quality is POOR (MQ135 > 1500) -> Turn Fan ON
       if (airQuality == "POOR") {
         digitalWrite(RELAY_FAN, RELAY_ON);
         fanActive = true;
@@ -394,7 +443,7 @@ void loop() {
         fanActive = false;
       }
 
-      // Condition B: If humidity is below 75% -> Turn Humidifier ON
+      // Autonomous Mode Condition B: If humidity is below 75% -> Turn Humidifier ON
       if (humidity < HUMIDITY_MIN_THRESHOLD) {
         digitalWrite(RELAY_HUMIDIFIER, RELAY_ON);
         humidifierActive = true;
@@ -409,8 +458,8 @@ void loop() {
                   fanActive ? "ON" : "OFF", humidifierActive ? "ON" : "OFF",
                   manualOverride ? "MANUAL" : "AUTO");
 
-    // 5. Update Local OLED Display
-    updateOLED(temperature, humidity, airQuality, rawAir, fanActive, humidifierActive, manualOverride);
+    // 5. Update Local OLED Display with Live Data & Conditions
+    updateOLED(temperature, humidity, airQuality, fanActive, humidifierActive, rawAir, manualOverride);
 
     // 6. Transmit Telemetry JSON to Flask Backend
     sendTelemetry(temperature, humidity, airQuality, rawAir, fanActive, humidifierActive, manualOverride);
@@ -425,7 +474,7 @@ void loop() {
       Blynk.virtualWrite(V4, humidifierActive ? 1 : 0);
       Blynk.virtualWrite(V5, manualOverride ? 1 : 0);
       Blynk.virtualWrite(V6, rawAir);
-      Serial.println("[Blynk] Telemetry pushed to Cloud (V0:Temp, V1:Hum, V2:Air, V3:Fan, V4:Hum, V5:Mode, V6:ADC)");
+      Serial.println("[Blynk] Telemetry synced to Cloud (V0:Temp, V1:Hum, V2:Air, V3:Fan, V4:Hum, V5:Mode, V6:ADC)");
     }
 #endif
   }
