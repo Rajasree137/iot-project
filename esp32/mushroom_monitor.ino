@@ -263,10 +263,11 @@ void setup()
   Serial.println("ESP32 DevKit • OLED • Blynk IoT • Flask Backend");
   Serial.println("==================================================");
 
-  // 1. Initialize DHT11 Sensor (GPIO 5)
+  // 1. Initialize DHT11 Sensor (GPIO 5 with internal pull-up)
+  pinMode(DHTPIN, INPUT_PULLUP);
   dht.begin();
-  delay(1000);
-  Serial.println("[Sensors] DHT11 initialized on GPIO 5");
+  delay(1500);
+  Serial.println("[Sensors] DHT11 initialized on GPIO 5 with INPUT_PULLUP");
 
   // 2. Initialize MQ135 Air Quality Sensor (GPIO 34)
   pinMode(MQ135_PIN, INPUT);
@@ -375,17 +376,30 @@ void loop()
   {
     lastTelemetryTime = currentMillis;
 
-    // A. Read Sensors
+    // A. Read Sensors (with auto-retry if first pulse is missed)
     float temp = dht.readTemperature();
     float hum = dht.readHumidity();
+
+    if (isnan(temp) || isnan(hum)) {
+      // Retry up to 2 times with a 250ms gap before giving up
+      for (int attempt = 1; attempt <= 2; attempt++) {
+        delay(250);
+        if (isnan(temp)) temp = dht.readTemperature();
+        if (isnan(hum)) hum = dht.readHumidity();
+        if (!isnan(temp) && !isnan(hum)) {
+          Serial.printf("[Sensors] Recovered DHT11 on retry #%d!\n", attempt);
+          break;
+        }
+      }
+    }
+
     int airQuality = digitalRead(MQ135_PIN); // HIGH = POOR air, LOW = OK
 
-    Serial.print("[Tele] Temp: ");
-    Serial.print(temp);
-    Serial.print(" C, Hum: ");
-    Serial.print(hum);
-    Serial.print(" %, Air: ");
-    Serial.print(airQuality == HIGH ? "POOR" : "OK");
+    if (isnan(temp) || isnan(hum)) {
+      Serial.println("[Sensors WARN] DHT11 returned NaN. Check: 1) VCC connected to 5V/VIN (not 3.3V), 2) Data on GPIO 5, 3) Blue=DHT11 vs White=DHT22.");
+    } else {
+      Serial.printf("[Tele] Temp: %.1f C, Hum: %.1f %%, Air: %s\n", temp, hum, airQuality == HIGH ? "POOR" : "OK");
+    }
 
     // B. Actuator Control Logic (Auto Mode vs Manual Mode)
     if (manualOverride) {
